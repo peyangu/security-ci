@@ -52,7 +52,7 @@ function readResult(dir, name) {
   const exitPath = join(dir, `${name}.exit`);
   const jsonPath = join(dir, `${name}.json`);
   const tool = name.replace(/-base$/, '');
-  if (!existsSync(exitPath) || !existsSync(jsonPath)) {
+  if (!existsSync(exitPath)) {
     errors.push(`${name}: result missing (scanner did not run or crashed)`);
     return null;
   }
@@ -61,10 +61,15 @@ function readResult(dir, name) {
     errors.push(`${name}: scanner exited with unexpected code ${code}`);
     return null;
   }
-  const raw = readFileSync(jsonPath, 'utf8').trim();
+  // osv-scanner exits 128 without writing (or with an empty) output file when
+  // the repo has no package sources at all. Only that exact case means "nothing".
+  const raw = existsSync(jsonPath) ? readFileSync(jsonPath, 'utf8').trim() : null;
+  if (tool === 'osv' && code === 128 && !raw) return { results: [] };
+  if (raw === null) {
+    errors.push(`${name}: result missing (scanner did not run or crashed)`);
+    return null;
+  }
   if (raw === '') {
-    // osv-scanner writes nothing when there are no packages to scan
-    if (tool === 'osv' && code === 128) return { results: [] };
     errors.push(`${name}: empty result file`);
     return null;
   }
