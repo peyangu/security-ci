@@ -1,0 +1,25 @@
+# The toolkit runs its own gate on itself. With no toolkit-repository given,
+# PRs are judged by the gate and rules at the PR's base commit, so a PR cannot
+# loosen what judges it. Make "security / gate" a required check on main.
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 0 * * 1' # Mon 09:23 JST
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    uses: ./.github/workflows/reusable-security-scan.yml
+    permissions:
+      contents: read
+      security-events: write

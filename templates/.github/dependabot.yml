@@ -1,0 +1,45 @@
+# Continuous dependency vulnerability notifications + update PRs.
+# Also enable in Settings → Code security: Dependabot alerts, Dependabot
+# security updates, and Private vulnerability reporting.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: Asia/Tokyo
+    # Do not adopt a version until it has been public for a while: most
+    # malicious-publish incidents are caught and yanked within days.
+    # (Security updates are not delayed by cooldown.)
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    open-pull-requests-limit: 10
+    labels: [dependencies]
+    groups:
+      dev-minor-patch:
+        dependency-type: development
+        update-types: [minor, patch]
+      prod-minor-patch:
+        dependency-type: production
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: Asia/Tokyo
+    cooldown:
+      default-days: 7
+    # security-ci is pinned twice (uses: …@sha and toolkit-ref) and must move as
+    # one; update it with security-ci's scripts/install.mjs --update instead.
+    ignore:
+      - dependency-name: "peyangu/security-ci*"
+    labels: [dependencies, ci]
+    groups:
+      actions:
+        patterns: ["*"]

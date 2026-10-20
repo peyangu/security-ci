@@ -1,0 +1,105 @@
+# Electron hardening rules that the registry packs do not cover well.
+# Severity ERROR blocks at fail-on=high; WARNING is reported only.
+# Reference: https://www.electronjs.org/docs/latest/tutorial/security
+rules:
+  - id: electron-node-integration-enabled
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      nodeIntegration: true gives renderer code (and any XSS in it) full Node.js access.
+      Keep it false and expose narrow APIs through a preload + contextBridge.
+    pattern: |
+      { ..., nodeIntegration: true, ... }
+    metadata:
+      category: security
+      gate-severity: critical
+
+  - id: electron-context-isolation-disabled
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      contextIsolation: false lets page scripts reach the preload's privileged scope.
+    pattern: |
+      { ..., contextIsolation: false, ... }
+    metadata:
+      category: security
+      gate-severity: critical
+
+  - id: electron-web-security-disabled
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: "webSecurity: false (or allowRunningInsecureContent: true) disables the same-origin policy."
+    pattern-either:
+      - pattern: |
+          { ..., webSecurity: false, ... }
+      - pattern: |
+          { ..., allowRunningInsecureContent: true, ... }
+    metadata:
+      category: security
+
+  - id: electron-sandbox-disabled
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      sandbox: false runs the preload unsandboxed. Enable the sandbox unless the
+      preload genuinely needs Node APIs beyond contextBridge/ipcRenderer.
+    pattern: |
+      { ..., sandbox: false, ... }
+    metadata:
+      category: security
+
+  - id: electron-open-external-unvalidated
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      shell.openExternal() with a URL that is not checked against an allowlist of
+      schemes/hosts can launch arbitrary protocol handlers (file:, smb:, ms-*: …) —
+      a known Electron RCE vector. Parse with new URL() and allow only https: (and
+      the hosts you expect) before calling it.
+    patterns:
+      - pattern-either:
+          - pattern: shell.openExternal($URL, ...)
+          - pattern: $X.shell.openExternal($URL, ...)
+      - pattern-not: shell.openExternal("...", ...)
+      # Accept call sites guarded by a check that mentions the same URL value.
+      - pattern-not-inside: |
+          if (<... $URL ...>) { ... }
+      - pattern-not-inside: |
+          if (<... $URL ...>) return ...;
+          ...
+      - pattern-not-inside: |
+          if (<... $URL ...>) { ... return ...; }
+          ...
+    metadata:
+      category: security
+
+  - id: electron-ipc-handler-unvalidated-arg
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: >-
+      IPC handler forwards a renderer-supplied argument without visible validation.
+      Treat everything from the renderer as untrusted input: validate type/shape/range.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              ipcMain.on($CH, ($E, $ARG) => { ... })
+          - pattern: |
+              ipcMain.handle($CH, ($E, $ARG) => { ... })
+      - pattern-not: |
+          ipcMain.$M($CH, ($E, $ARG) => { ... if (<... $ARG ...>) { ... } ... })
+      - pattern-not: |
+          ipcMain.$M($CH, ($E, $ARG) => { ... if (<... $ARG ...>) return ...; ... })
+    metadata:
+      category: security
+
+  - id: dynamic-code-execution
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: eval / new Function / string timers execute arbitrary code.
+    pattern-either:
+      - pattern: eval($X)
+      - pattern: new Function(...)
+      - pattern: setTimeout("...", ...)
+      - pattern: setInterval("...", ...)
+    metadata:
+      category: security

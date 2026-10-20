@@ -1,0 +1,58 @@
+# Keeps one `security-report` issue in sync with the latest full scan: opened or
+# updated while something blocks, closed with a summary once clean.
+# Call it in the same workflow run as reusable-security-scan.yml (it reads that
+# run's `security-gate-result` artifact; a missing result is reported as a block).
+name: reusable-security-report
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true
+        with:
+          name: security-gate-result
+          path: result
+      - name: Update tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create security-report --color B60205 --description "Weekly security scan status" 2>/dev/null || true
+          if [ -f result/gate-result.json ]; then
+            node -e '
+              const r = require("./result/gate-result.json");
+              const b = r.findings.filter(f => f.blocking);
+              const lines = [
+                `**Status:** ${r.blocked ? "🛑 releases are BLOCKED" : "✅ clean"} — [scan run](${process.env.RUN_URL})`, "",
+                `OSV ${r.counts.osv} · Semgrep ${r.counts.semgrep} · Gitleaks ${r.counts.gitleaks} · blocking **${b.length}**`, "",
+                ...r.errors.map(e => `- ⚠️ gate error: ${e}`),
+                ...(b.length ? ["| severity | tool | finding | location |", "|---|---|---|---|"] : []),
+                ...b.slice(0, 80).map(f => `| ${f.severity} | ${f.tool} | ${f.title.replace(/\|/g, "\|")} | \`${f.location}\` |`),
+                b.length > 80 ? `\n…and ${b.length - 80} more in the run artifact.` : "",
+                r.unusedExceptions.length ? `\nUnused exceptions to remove: ${r.unusedExceptions.join(", ")}` : "",
+                "", "Triage: fix → Dependabot/weekly fix PR → or add a time-boxed entry to `.security/exceptions.json` (see https://github.com/peyangu/security-ci/blob/main/docs/SECURITY_CI.md).",
+              ];
+              require("fs").writeFileSync("body.md", lines.join("\n"));
+              require("fs").writeFileSync("blocked", String(r.blocked));
+            '
+          else
+            printf '**Status:** ⚠️ the scan did not produce a result — [run](%s)\n' "$RUN_URL" > body.md
+            echo true > blocked
+          fi
+          num="$(gh issue list --label security-report --state open --json number --jq '.[0].number')"
+          if [ "$(cat blocked)" = true ]; then
+            if [ -n "$num" ]; then gh issue edit "$num" --body-file body.md
+            else gh issue create --title "Security: weekly scan findings" --label security-report --body-file body.md; fi
+          elif [ -n "$num" ]; then
+            gh issue close "$num" --comment "$(cat body.md)"
+          fi

@@ -1,0 +1,63 @@
+# Weekly lockfile-only dependency fix: `npm audit fix --package-lock-only
+# --ignore-scripts` (semver-compatible, no install scripts run), proposed as a
+# PR. Majors (e.g. Electron) stay with Dependabot / a human.
+name: reusable-deps-fix
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "22"
+    secrets:
+      SECURITY_BOT_PRIVATE_KEY:
+        description: "Private key of the GitHub App whose token opens the PR (so the PR's own CI runs). Optional."
+        required: false
+
+permissions: {}
+
+jobs:
+  deps-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          package-manager-cache: false
+      - run: npm audit fix --package-lock-only --ignore-scripts || true
+      # A PR opened with GITHUB_TOKEN does not trigger workflows, so its security
+      # gate would never run. Prefer a GitHub App token when one is configured.
+      - id: app-token
+        if: vars.SECURITY_BOT_APP_ID != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.SECURITY_BOT_APP_ID }}
+          private-key: ${{ secrets.SECURITY_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          branch: security/weekly-deps-fix
+          delete-branch: true
+          add-paths: |
+            package.json
+            package-lock.json
+          commit-message: "fix(deps): npm audit fix (lockfile only)"
+          title: "fix(deps): weekly security dependency updates"
+          labels: |
+            security
+            dependencies
+          body: |
+            Automated `npm audit fix --package-lock-only --ignore-scripts` from the weekly security scan
+            (${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+            Semver-compatible updates only. Remaining findings (major upgrades, no fix yet) are listed in the
+            `security-report` issue. The security gate on this PR shows what it resolves.

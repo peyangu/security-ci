@@ -1,0 +1,58 @@
+# Weekly (peyangu/security-ci): full scan of main (new advisories appear without
+# any code change), a tracking issue, a lockfile-only dependency fix PR, and —
+# when the AI_SECURITY_AUDIT variable is 'true' — AI-generated security tests.
+name: security-weekly
+
+on:
+  schedule:
+    - cron: '17 0 * * 1' # Mon 09:17 JST
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: security-weekly
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    uses: peyangu/security-ci/.github/workflows/reusable-security-scan.yml@__SECURITY_CI_REF__
+    with:
+      mode: full
+      toolkit-repository: peyangu/security-ci
+      toolkit-ref: __SECURITY_CI_REF__
+    permissions:
+      contents: read
+      security-events: write
+
+  report:
+    needs: scan
+    if: always()
+    uses: peyangu/security-ci/.github/workflows/reusable-security-report.yml@__SECURITY_CI_REF__
+    permissions:
+      issues: write
+
+  deps-fix:
+    needs: scan
+    if: always()
+    uses: peyangu/security-ci/.github/workflows/reusable-deps-fix.yml@__SECURITY_CI_REF__
+    secrets:
+      SECURITY_BOT_PRIVATE_KEY: ${{ secrets.SECURITY_BOT_PRIVATE_KEY }}
+    permissions:
+      contents: write
+      pull-requests: write
+
+  ai-tests:
+    needs: scan
+    if: always() && vars.AI_SECURITY_AUDIT == 'true'
+    uses: peyangu/security-ci/.github/workflows/reusable-ai-security-tests.yml@__SECURITY_CI_REF__
+    with:
+      model: ${{ vars.AI_AUDIT_MODEL || 'claude-opus-5-5' }}
+      toolkit-repository: peyangu/security-ci
+      toolkit-ref: __SECURITY_CI_REF__
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SECURITY_BOT_PRIVATE_KEY: ${{ secrets.SECURITY_BOT_PRIVATE_KEY }}
+    permissions:
+      contents: write
+      pull-requests: write

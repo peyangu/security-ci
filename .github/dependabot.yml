@@ -1,0 +1,16 @@
+# The toolkit pins every action by SHA; keep those pins current.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: Asia/Tokyo
+    cooldown:
+      default-days: 7
+    labels: [dependencies, ci]
+    groups:
+      actions:
+        patterns: ["*"]

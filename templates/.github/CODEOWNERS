@@ -1,0 +1,8 @@
+# Security-sensitive paths: changes here alter what CI is allowed to let through.
+# With a ruleset requiring Code Owner review, these cannot be merged unreviewed
+# (including by automation and AI agents).
+/.github/        @peyangu
+/.security/      @peyangu
+/package.json    @peyangu
+/package-lock.json @peyangu
+# Add this repo's own sensitive paths too, e.g. /electron/ for an Electron app.

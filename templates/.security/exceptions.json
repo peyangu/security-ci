@@ -1,0 +1,4 @@
+{
+  "$comment": "Reviewed, time-boxed suppressions for the security gate. key = the finding key shown in the gate summary (osv:<id>:<package> | semgrep:<rule>:<path> | gitleaks:<fingerprint> | bypass-file:<path>). reason and expires (YYYY-MM-DD, max 90 days out) are required. Expired entries stop applying. See docs/SECURITY_CI.md.",
+  "exceptions": []
+}

@@ -1,0 +1,27 @@
+# Per-change security gate (peyangu/security-ci). Make "security / gate" a
+# required status check on main (Settings → Rules → Rulesets) so a red gate
+# blocks the merge. Update both refs together with scripts/install.mjs.
+name: security
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    uses: peyangu/security-ci/.github/workflows/reusable-security-scan.yml@__SECURITY_CI_REF__
+    with:
+      toolkit-repository: peyangu/security-ci
+      toolkit-ref: __SECURITY_CI_REF__
+    permissions:
+      contents: read
+      security-events: write

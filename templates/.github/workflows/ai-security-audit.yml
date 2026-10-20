@@ -1,0 +1,26 @@
+# On-demand run of the AI security test agent (peyangu/security-ci). The weekly
+# workflow also runs it when the AI_SECURITY_AUDIT repository variable is 'true'.
+name: ai-security-audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Claude model ID
+        default: claude-opus-5-5
+
+permissions: {}
+
+jobs:
+  ai-tests:
+    uses: peyangu/security-ci/.github/workflows/reusable-ai-security-tests.yml@__SECURITY_CI_REF__
+    with:
+      model: ${{ inputs.model }}
+      toolkit-repository: peyangu/security-ci
+      toolkit-ref: __SECURITY_CI_REF__
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SECURITY_BOT_PRIVATE_KEY: ${{ secrets.SECURITY_BOT_PRIVATE_KEY }}
+    permissions:
+      contents: write
+      pull-requests: write

@@ -1,0 +1,292 @@
+# Reusable security scan: OSV-Scanner (dependencies) + Semgrep (SAST) + Gitleaks
+# (secrets), merged by a fail-closed gate. Callers decide what a red gate stops
+# (PR merge via required check, release via `needs:`).
+#
+# Other repos call it pinned to a commit of peyangu/security-ci, and pass the
+# same commit as toolkit-ref so the gate and rules come from that commit:
+#   uses: peyangu/security-ci/.github/workflows/reusable-security-scan.yml@<sha>
+#   with: { toolkit-repository: peyangu/security-ci, toolkit-ref: <sha> }
+# See templates/ and docs/SECURITY_CI.md.
+name: reusable-security-scan
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "auto | pr | full. pr = block only on what the change introduces; full = block on everything present."
+        type: string
+        default: auto
+      fail-on:
+        description: "Lowest severity that blocks: critical | high | medium | low"
+        type: string
+        default: high
+      semgrep-configs:
+        description: "Newline-separated Semgrep registry configs, added to the toolkit's own rules"
+        type: string
+        default: |
+          p/default
+          p/javascript
+          p/typescript
+      exceptions-path:
+        description: "Reviewed exception list, relative to the scanned repo"
+        type: string
+        default: .security/exceptions.json
+      toolkit-repository:
+        description: "Repo holding gate.mjs and the Semgrep rules. Empty = the calling repo (at the PR base for PRs)."
+        type: string
+        default: ""
+      toolkit-ref:
+        description: "Ref of toolkit-repository (pin a SHA or tag)"
+        type: string
+        default: ""
+      upload-sarif:
+        description: "Upload Semgrep SARIF to code scanning (needs security-events: write; no-op without GHAS on private repos)"
+        type: boolean
+        default: true
+    outputs:
+      blocked:
+        description: "'true' when the gate blocked"
+        value: ${{ jobs.gate.outputs.blocked }}
+
+permissions: {}
+
+jobs:
+  context:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.ctx.outputs.mode }}
+      base-sha: ${{ steps.ctx.outputs.base-sha }}
+      toolkit-repository: ${{ steps.ctx.outputs.toolkit-repository }}
+      toolkit-ref: ${{ steps.ctx.outputs.toolkit-ref }}
+    steps:
+      - id: ctx
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_FAIL_ON: ${{ inputs.fail-on }}
+          INPUT_TOOLKIT_REPO: ${{ inputs.toolkit-repository }}
+          INPUT_TOOLKIT_REF: ${{ inputs.toolkit-ref }}
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          MQ_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          case "$INPUT_FAIL_ON" in critical|high|medium|low) ;; *) echo "::error::invalid fail-on: $INPUT_FAIL_ON"; exit 1;; esac
+          mode="$INPUT_MODE"
+          if [ "$mode" = auto ]; then
+            case "$EVENT" in pull_request|merge_group) mode=pr ;; *) mode=full ;; esac
+          fi
+          case "$mode" in pr|full) ;; *) echo "::error::invalid mode: $mode"; exit 1;; esac
+          base="${PR_BASE:-$MQ_BASE}"
+          if [ "$mode" = pr ] && [ -z "$base" ]; then
+            echo "::error::mode=pr needs a pull_request or merge_group event"; exit 1
+          fi
+          if [ -n "$INPUT_TOOLKIT_REPO" ]; then
+            repo="$INPUT_TOOLKIT_REPO"; ref="$INPUT_TOOLKIT_REF"
+          else
+            # Same-repo toolkit: for PRs use the base commit's copy, so a PR
+            # cannot weaken the gate or rules that judge it.
+            repo="$GITHUB_REPOSITORY"; ref="${base:-$GITHUB_SHA}"
+          fi
+          {
+            echo "mode=$mode"
+            echo "base-sha=$base"
+            echo "toolkit-repository=$repo"
+            echo "toolkit-ref=$ref"
+          } >> "$GITHUB_OUTPUT"
+          echo "mode=$mode base=$base toolkit=$repo@$ref"
+
+  osv:
+    needs: context
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.context.outputs.toolkit-repository }}
+          ref: ${{ needs.context.outputs.toolkit-ref }}
+          path: toolkit
+          persist-credentials: false
+      - run: bash toolkit/security/install-scanners.sh "$RUNNER_TEMP/bin" osv-scanner
+      - name: Scan
+        env:
+          MODE: ${{ needs.context.outputs.mode }}
+          BASE_SHA: ${{ needs.context.outputs.base-sha }}
+        run: |
+          out="$RUNNER_TEMP/results"; mkdir -p "$out"
+          set +e
+          osv-scanner scan source -r --format json --output-file "$out/osv.json" target
+          echo $? > "$out/osv.exit"
+          if [ "$MODE" = pr ]; then
+            git -C target worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
+            osv-scanner scan source -r --format json --output-file "$out/osv-base.json" "$RUNNER_TEMP/base"
+            echo $? > "$out/osv-base.exit"
+          fi
+          exit 0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-osv
+          path: ${{ runner.temp }}/results
+          retention-days: 30
+
+  semgrep:
+    needs: context
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.context.outputs.toolkit-repository }}
+          ref: ${{ needs.context.outputs.toolkit-ref }}
+          path: toolkit
+          persist-credentials: false
+      - run: pipx install semgrep==1.178.0
+      - name: Scan
+        working-directory: target
+        env:
+          MODE: ${{ needs.context.outputs.mode }}
+          BASE_SHA: ${{ needs.context.outputs.base-sha }}
+          SEMGREP_CONFIGS: ${{ inputs.semgrep-configs }}
+        run: |
+          out="$RUNNER_TEMP/results"; mkdir -p "$out"
+          # --disable-nosem: inline `nosemgrep` comments are ignored; suppressions
+          # must go through the reviewed exceptions file instead.
+          args=(--metrics=off --disable-nosem --timeout 60
+                --json-output="$out/semgrep.json" --sarif-output="$out/semgrep.sarif"
+                --config "$GITHUB_WORKSPACE/toolkit/security/semgrep")
+          while IFS= read -r c; do [ -n "$c" ] && args+=(--config "$c"); done <<< "$SEMGREP_CONFIGS"
+          [ "$MODE" = pr ] && args+=(--baseline-commit "$BASE_SHA")
+          set +e
+          semgrep scan "${args[@]}" .
+          echo $? > "$out/semgrep.exit"
+          exit 0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-semgrep
+          path: ${{ runner.temp }}/results
+          retention-days: 30
+
+  gitleaks:
+    needs: context
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.context.outputs.toolkit-repository }}
+          ref: ${{ needs.context.outputs.toolkit-ref }}
+          path: toolkit
+          persist-credentials: false
+      - run: bash toolkit/security/install-scanners.sh "$RUNNER_TEMP/bin" gitleaks
+      - name: Scan
+        env:
+          MODE: ${{ needs.context.outputs.mode }}
+          BASE_SHA: ${{ needs.context.outputs.base-sha }}
+        run: |
+          out="$RUNNER_TEMP/results"; mkdir -p "$out"
+          # full: entire history (a secret in an old commit is still public).
+          # pr:   only the commits this change adds.
+          # --ignore-gitleaks-allow: inline `gitleaks:allow` comments do not suppress.
+          args=(git --no-banner --redact --ignore-gitleaks-allow --exit-code 0
+                --report-format json --report-path "$out/gitleaks.json")
+          [ "$MODE" = pr ] && args+=(--log-opts "$BASE_SHA..$GITHUB_SHA")
+          set +e
+          gitleaks "${args[@]}" target
+          echo $? > "$out/gitleaks.exit"
+          exit 0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-gitleaks
+          path: ${{ runner.temp }}/results
+          retention-days: 30
+
+  gate:
+    needs: [context, osv, semgrep, gitleaks]
+    # Run even when a scanner job failed: the gate turns a missing result into a block.
+    if: always() && needs.context.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    outputs:
+      blocked: ${{ steps.result.outputs.blocked }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.context.outputs.toolkit-repository }}
+          ref: ${{ needs.context.outputs.toolkit-ref }}
+          path: toolkit
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: security-{osv,semgrep,gitleaks}
+          path: results
+          merge-multiple: true
+      - name: Flag changes to security config
+        if: needs.context.outputs.mode == 'pr'
+        env:
+          BASE_SHA: ${{ needs.context.outputs.base-sha }}
+        run: |
+          changed="$(git -C target diff --name-only "$BASE_SHA" HEAD -- .security .github || true)"
+          if [ -n "$changed" ]; then
+            echo "::warning::This change edits security configuration — review it by hand: $(echo "$changed" | tr '\n' ' ')"
+            { echo "### ⚠️ Security configuration changed in this PR"; echo; echo "$changed" | sed 's/^/- `/; s/$/`/'; echo; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Gate
+        env:
+          MODE: ${{ needs.context.outputs.mode }}
+          FAIL_ON: ${{ inputs.fail-on }}
+          EXCEPTIONS: ${{ inputs.exceptions-path }}
+        run: >-
+          node toolkit/security/gate.mjs
+          --results results --mode "$MODE" --fail-on "$FAIL_ON"
+          --exceptions "target/$EXCEPTIONS" --repo target
+          --summary "$GITHUB_STEP_SUMMARY" --out results/gate-result.json
+      - id: result
+        if: always()
+        run: |
+          if [ -f results/gate-result.json ] && node -e 'process.exit(require("./results/gate-result.json").blocked ? 1 : 0)'; then
+            echo "blocked=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "blocked=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: security-gate-result
+          path: results/gate-result.json
+          retention-days: 90
+          if-no-files-found: ignore
+      - uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        if: always() && inputs.upload-sarif && hashFiles('results/semgrep.sarif') != ''
+        continue-on-error: true # code scanning is a convenience view; the gate above is the control
+        with:
+          sarif_file: results/semgrep.sarif
+          category: semgrep
+          checkout_path: ${{ github.workspace }}/target
