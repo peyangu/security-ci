@@ -157,6 +157,8 @@ node scripts/install.mjs ../<repo> --update    # security-ci を更新した後�
 
 GitHub 設定（UIで1回だけ）：
 
+> **Private リポジトリと料金プラン**：Rulesets（必須チェック・PR必須・タグ保護）と Secret scanning の push protection は、Private リポジトリでは無料プランだと使えない（GitHub Pro 以上が必要）。無料のままだとゲートは「赤く表示される」だけで、マージ自体は止まらない。Dependabot alerts / security updates と Actions の権限設定は無料で使える。
+
 1. **Settings → Code security**：Dependabot alerts / Dependabot security updates / Secret scanning + **Push protection** / Private vulnerability reporting を ON。
 2. **Settings → Rules → Rulesets（main）**：
    - Require a pull request（直接 push 禁止）、Require status checks：`security / gate`（+ 既存のビルド系）
