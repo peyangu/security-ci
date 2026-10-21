@@ -37,7 +37,7 @@ jobs:
                 `OSV ${r.counts.osv} · Semgrep ${r.counts.semgrep} · Gitleaks ${r.counts.gitleaks} · blocking **${b.length}**`, "",
                 ...r.errors.map(e => `- ⚠️ gate error: ${e}`),
                 ...(b.length ? ["| severity | tool | finding | location |", "|---|---|---|---|"] : []),
-                ...b.slice(0, 80).map(f => `| ${f.severity} | ${f.tool} | ${f.title.replace(/\|/g, "\|")} | \`${f.location}\` |`),
+                ...b.slice(0, 80).map(f => `| ${f.severity} | ${f.tool} | ${f.title.replace(/\|/g, "\\|")} | \`${f.location}\` |`),
                 b.length > 80 ? `\n…and ${b.length - 80} more in the run artifact.` : "",
                 r.unusedExceptions.length ? `\nUnused exceptions to remove: ${r.unusedExceptions.join(", ")}` : "",
                 "", "Triage: fix → Dependabot/weekly fix PR → or add a time-boxed entry to `.security/exceptions.json` (see https://github.com/peyangu/security-ci/blob/main/docs/SECURITY_CI.md).",

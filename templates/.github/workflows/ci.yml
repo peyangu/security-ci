@@ -1,0 +1,26 @@
+# Build check (peyangu/security-ci): on every PR and push to main, install and
+# run the scripts below. Make "ci / build" a required check next to
+# "security / gate" so a change that breaks the build cannot be merged.
+name: ci
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: peyangu/security-ci/.github/workflows/reusable-node-ci.yml@__SECURITY_CI_REF__
+    with:
+      commands: |
+__CI_COMMANDS__
+    permissions:
+      contents: read

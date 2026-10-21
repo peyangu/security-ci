@@ -1,0 +1,62 @@
+# Build check for Node projects: does the project still install, build and pass
+# its tests? Not a security scan — it answers the question the security gate
+# does not ("is it still working?"), so dependency updates can be triaged.
+# The job is named `build`; with a caller job `ci` the check is "ci / build".
+name: reusable-node-ci
+
+on:
+  workflow_call:
+    inputs:
+      commands:
+        description: "Newline-separated npm scripts to run in order (e.g. build, test)"
+        type: string
+        required: true
+      node-version:
+        type: string
+        default: "22"
+      install-command:
+        description: "How to install. Default runs no install scripts (a compromised dependency's postinstall should not run in CI)."
+        type: string
+        default: npm ci --ignore-scripts
+      working-directory:
+        type: string
+        default: .
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          # PRs from any branch could seed a shared cache; keep builds clean.
+          package-manager-cache: false
+      - name: Install
+        env:
+          INSTALL: ${{ inputs.install-command }}
+        run: $INSTALL
+      - name: Run
+        env:
+          COMMANDS: ${{ inputs.commands }}
+        run: |
+          ran=0
+          while IFS= read -r script; do
+            script="$(echo "$script" | xargs)"
+            [ -z "$script" ] && continue
+            echo "::group::npm run $script"
+            npm run "$script"
+            echo "::endgroup::"
+            ran=$((ran + 1))
+          done <<< "$COMMANDS"
+          if [ "$ran" -eq 0 ]; then echo "::error::no commands given"; exit 1; fi
